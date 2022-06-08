@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"runtime"
@@ -8,7 +9,7 @@ import (
 )
 
 func main() {
-	pooling()
+	fanOutSemaphore()
 }
 
 // A Goroutine foundation pattern used by larger patterns like fan out/in.In this patttern a gourtine is
@@ -104,4 +105,98 @@ func pooling() {
 	fmt.Println("parent:sent shutdown signal")
 	time.Sleep(time.Second)
 	fmt.Println("--------------------------")
+}
+
+// drop pattern important pattern for service that may experience
+// loads of trafic at times, letting you drop request when capacity
+// is full. The key of this pattern is the default statement that
+// lets you drop, cancel or redirect work when capacity is full.
+// By that it give you options
+func drop() {
+	cap := 4
+	ch := make(chan string, cap)
+
+	go func() {
+		for p := range ch {
+			fmt.Println("child: recv signal :", p)
+		}
+	}()
+
+	const work = 2000
+	for w := 0; w < work; w++ {
+		select {
+		case ch <- "data":
+			fmt.Println("Parent: sent signal:", w)
+		default:
+			fmt.Println("parent drop data:", w)
+		}
+	}
+
+	close(ch)
+	fmt.Println("parent: sent shutdown signal")
+	time.Sleep(time.Second)
+	fmt.Println("--------------------------------------------")
+}
+
+// cancelation pattern is used to tell a function performing some i/o
+// how long is willing to whait by canceling it or just walking away
+// In this example its important to create a buffered chanel of 1
+// because if we walk away the goroutine needs to be able to have
+// someone to recieve its works or else it blocks for ever and becomes
+// a memory leak
+func cancelation() {
+	duration := 150 * time.Microsecond
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
+
+	defer cancel()
+
+	ch := make(chan string, 1)
+
+	go func() {
+		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
+		ch <- "data"
+	}()
+
+	select {
+	case d := <-ch:
+		fmt.Println("work complete", d)
+	case <-ctx.Done():
+		fmt.Println("work canceled")
+	}
+	time.Sleep(time.Second)
+	fmt.Println("--------------------------------------------")
+}
+
+// Fan In/Out Semaphore pattern provides a mechanics to control
+// the number of goroutine executing work at any given time while
+// still creating a unique goroutine for each piece of works
+func fanOutSemaphore() {
+	children := 2000
+	ch := make(chan string, children)
+
+	g := runtime.GOMAXPROCS(0)
+	sem := make(chan bool, g)
+
+	for c := 0; c < children; c++ {
+		go func(child int) {
+			sem <- true
+			{
+				t := time.Duration(rand.Intn(200)) * time.Microsecond
+				time.Sleep(t)
+				ch <- "data"
+				fmt.Println("child : sent signal :", child)
+			}
+			<-sem
+		}(c)
+	}
+
+	for children > 0 {
+		d := <-ch
+		children--
+		fmt.Println(d)
+		fmt.Println("parent: recv signal :", children)
+	}
+
+	time.Sleep(time.Second)
+	fmt.Println("--------------------------------------------")
 }
